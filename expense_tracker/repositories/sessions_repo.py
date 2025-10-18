@@ -1,52 +1,59 @@
-from typing import Optional, List, Dict, Any
-from ..db import connect_ctx, now_iso
+# expense_tracker/repositories/sessions_repo.py
+from __future__ import annotations
 
-async def create(user_id: str, title: str) -> str:
-    """Insert a session and return id."""
-    import uuid
+from typing import Optional, List, Dict, Any
+import uuid
+
+from ..db import connect_ctx
+from ..utils.dates import utc_now_iso
+
+
+async def create(*, user_id: str, title: str = "") -> Dict[str, Any]:
+    """
+    Create a session row, return {"session_id", "created_at"}.
+    """
     sid = str(uuid.uuid4())
-    ts = now_iso()
+    now = utc_now_iso()
     async with connect_ctx() as c:
         await c.execute(
-            "INSERT INTO sessions(id, user_id, title, status, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-            (sid, user_id, title, "open", ts, ts),
+            """
+            INSERT INTO sessions(id, user_id, title, status, created_at, updated_at)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (sid, user_id, title, "open", now, now),
         )
         await c.commit()
-    return sid
+    return {"session_id": sid, "created_at": now}
 
-async def close(session_id: str) -> Optional[str]:
-    """Close a session; return user_id if found."""
+
+async def close(*, session_id: str) -> None:
+    """
+    Close a session.
+    """
     async with connect_ctx() as c:
-        cur = await c.execute("SELECT user_id FROM sessions WHERE id = ?", (session_id,))
-        row = await cur.fetchone()
-        if not row:
-            return None
         await c.execute(
             "UPDATE sessions SET status='closed', updated_at=? WHERE id=?",
-            (now_iso(), session_id),
+            (utc_now_iso(), session_id),
         )
         await c.commit()
-    return row["user_id"]
 
-async def owner(session_id: str) -> Optional[str]:
-    """Get user_id for a session."""
-    async with connect_ctx() as c:
-        cur = await c.execute("SELECT user_id FROM sessions WHERE id = ?", (session_id,))
-        row = await cur.fetchone()
-        return row["user_id"] if row else None
 
-async def list_for_user(user_id: str, status: Optional[str]) -> List[Dict[str, Any]]:
-    """List sessions for a user (optional status)."""
+async def list_for_user(*, user_id: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    List sessions for a user, optionally filtered by status.
+    """
+    params: List[Any] = [user_id]
+    sql = """
+        SELECT id, title, status, created_at, updated_at
+        FROM sessions
+        WHERE user_id = ?
+    """
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    sql += " ORDER BY created_at DESC"
+
     async with connect_ctx() as c:
-        if status:
-            cur = await c.execute(
-                "SELECT id, title, status, created_at, updated_at FROM sessions WHERE user_id=? AND status=? ORDER BY created_at DESC",
-                (user_id, status),
-            )
-        else:
-            cur = await c.execute(
-                "SELECT id, title, status, created_at, updated_at FROM sessions WHERE user_id=? ORDER BY created_at DESC",
-                (user_id,),
-            )
+        cur = await c.execute(sql, params)
         rows = await cur.fetchall()
     return [dict(r) for r in rows]

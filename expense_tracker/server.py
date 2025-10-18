@@ -1,8 +1,11 @@
 # expense_tracker/server.py
+from __future__ import annotations
+
 from fastmcp import FastMCP
 import os
 from typing import Optional, List, Dict, Any, Literal
 
+# ✅ Use connect_ctx (async context manager) — do NOT import `connect`
 from .db import ensure_db, connect_ctx
 from .config import GLOBAL_CATEGORIES_PATH, DB_PATH
 from .utils.files import read_json_file
@@ -19,15 +22,28 @@ from .services import (
     stats_service,
     maintenance_service,
 )
+
+from .services.auth_service import (
+    upsert_user as _svc_upsert_user,
+    resolve_user,                 # imported to keep parity; used inside services
+    set_default_user_id,
+    get_default_user_id,
+    AuthError,
+)
+
 from .repositories import users_repo
 
-# initialize logging ASAP so everything after this point is captured
+
+# --------------------------------------------------------------------
+# Initialize logging ASAP so everything after this point is captured
+# --------------------------------------------------------------------
 setup_logging()
 
+# MCP server instance
 mcp = FastMCP("ExpenseTracker")
 
 
-# ----------------------------- Users -----------------------------
+# ============================= Users ==============================
 
 @mcp.tool()
 @log_tool("upsert_user", redact_keys=())
@@ -38,7 +54,7 @@ async def upsert_user(user_id: str, name: Optional[str] = None) -> Dict[str, Any
     return {"status": "ok", "user_id": user_id, "name": name or ""}
 
 
-# ---------------------------- Sessions ---------------------------
+# ============================ Sessions ============================
 
 @mcp.tool()
 @log_tool("create_session", redact_keys=())
@@ -47,12 +63,14 @@ async def create_session(user_id: str, title: Optional[str] = None) -> Dict[str,
     await ensure_db()
     return await sessions_service.create_session(user_id, title)
 
+
 @mcp.tool()
 @log_tool("end_session", redact_keys=())
 async def end_session(session_id: str) -> Dict[str, Any]:
     """Close a session."""
     await ensure_db()
     return await sessions_service.end_session(session_id)
+
 
 @mcp.tool()
 @log_tool("list_sessions", redact_keys=())
@@ -64,7 +82,7 @@ async def list_sessions(
     return await sessions_service.list_sessions(user_id, status)
 
 
-# ---------------------------- Expenses ---------------------------
+# ============================ Expenses ============================
 
 @mcp.tool()
 @log_tool("add_expense")
@@ -83,6 +101,7 @@ async def add_expense(
         date, amount, category, subcategory, note, user_id, session_id
     )
 
+
 @mcp.tool()
 @log_tool("bulk_add_expenses")
 async def bulk_add_expenses(
@@ -94,6 +113,7 @@ async def bulk_add_expenses(
     """Bulk insert expenses with progress notifications."""
     await ensure_db()
     return await expenses_service.bulk_add(items, user_id, session_id, batch_size)
+
 
 @mcp.tool()
 @log_tool("list_expenses", redact_keys=())
@@ -122,6 +142,7 @@ async def list_expenses(
         session_id,
     )
 
+
 @mcp.tool()
 @log_tool("summarize", redact_keys=())
 async def summarize(
@@ -138,6 +159,7 @@ async def summarize(
         start_date, end_date, category, group_by, user_id, session_id
     )
 
+
 @mcp.tool()
 @log_tool("delete_expense", redact_keys=())
 async def delete_expense(
@@ -150,7 +172,7 @@ async def delete_expense(
     return await expenses_service.delete_expense(expense_id, user_id, session_id)
 
 
-# --------------------------- Categories --------------------------
+# =========================== Categories ===========================
 
 @mcp.tool()
 @log_tool("get_categories", redact_keys=())
@@ -159,12 +181,14 @@ async def get_categories() -> Dict[str, Any]:
     await ensure_db()
     return await categories_service.get_global()
 
+
 @mcp.tool()
 @log_tool("set_categories")
 async def set_categories(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Set global categories.json (admin)."""
     await ensure_db()
     return await categories_service.set_global(payload)
+
 
 @mcp.tool()
 @log_tool("get_user_categories", redact_keys=())
@@ -174,6 +198,7 @@ async def get_user_categories(
     """Get per-user categories or fallback to global."""
     await ensure_db()
     return await categories_service.get_user(user_id, session_id)
+
 
 @mcp.tool()
 @log_tool("set_user_categories")
@@ -187,7 +212,7 @@ async def set_user_categories(
     return await categories_service.set_user(payload, user_id, session_id)
 
 
-# ---------------------------- Budgets ----------------------------
+# ============================= Budgets ============================
 
 @mcp.tool()
 @log_tool("set_budget")
@@ -202,6 +227,7 @@ async def set_budget(
     await ensure_db()
     return await budgets_service.set_budget(month, category, amount, user_id, session_id)
 
+
 @mcp.tool()
 @log_tool("get_budgets", redact_keys=())
 async def get_budgets(
@@ -213,6 +239,7 @@ async def get_budgets(
     """List budgets for user."""
     await ensure_db()
     return await budgets_service.list_budgets(user_id, session_id, month, category)
+
 
 @mcp.tool()
 @log_tool("budget_status", redact_keys=())
@@ -226,7 +253,7 @@ async def budget_status(
     return await budgets_service.status(month, user_id, session_id)
 
 
-# ------------------- Export / Stats / Maintenance ----------------
+# ============== Export / Stats / Maintenance ======================
 
 @mcp.tool()
 @log_tool("export_data", redact_keys=())
@@ -240,12 +267,14 @@ async def export_data(
     await ensure_db()
     return await export_service.export(user_id, session_id, start_date, end_date)
 
+
 @mcp.tool()
 @log_tool("get_stats", redact_keys=())
 async def get_stats(user_id: Optional[str] = None) -> Dict[str, Any]:
     """Return counts (user or global)."""
     await ensure_db()
     return await stats_service.stats(user_id)
+
 
 @mcp.tool()
 @log_tool("vacuum_analyze", redact_keys=())
@@ -255,7 +284,7 @@ async def vacuum_analyze() -> Dict[str, Any]:
     return await maintenance_service.vacuum_analyze()
 
 
-# -------------------------- Notifications ------------------------
+# =========================== Notifications ========================
 
 @mcp.tool()
 @log_tool("poll_notifications", redact_keys=())
@@ -270,7 +299,7 @@ async def poll_notifications(
     return await notifications_service.poll(user_id, session_id, after_id, limit)
 
 
-# ---------------------------- Resources --------------------------
+# ============================== Resources =========================
 
 @mcp.resource("expense://categories", mime_type="application/json")
 @log_resource("expense://categories")
@@ -279,6 +308,7 @@ async def categories_resource() -> str:
     data = await read_json_file(GLOBAL_CATEGORIES_PATH)
     import json as _json
     return _json.dumps(data, ensure_ascii=False, indent=2)
+
 
 @mcp.resource("expense://health", mime_type="application/json")
 @log_resource("expense://health")
@@ -294,6 +324,7 @@ async def health_resource() -> str:
     }
     return _json.dumps(info, ensure_ascii=False, indent=2)
 
+
 @mcp.resource("expense://schema", mime_type="application/json")
 @log_resource("expense://schema")
 async def schema_resource() -> str:
@@ -301,6 +332,7 @@ async def schema_resource() -> str:
     await ensure_db()
     import json as _json
     schema: Dict[str, Any] = {}
+    # ✅ Use a short-lived async connection context to avoid locks & thread reuse issues
     async with connect_ctx() as c:
         cur = await c.execute(
             "SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name;"
@@ -309,3 +341,28 @@ async def schema_resource() -> str:
         for r in rows:
             schema[r["name"]] = r["sql"]
     return _json.dumps(schema, ensure_ascii=False, indent=2)
+
+
+# ======================= Default user helpers =====================
+
+@mcp.tool()
+@log_tool(name="set_default_user")
+async def set_default_user(user_id: str, name: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Set a server-wide default user that will be used when user_id/session_id
+    are omitted by clients (e.g., MCP Inspector). Also ensures the user exists.
+    """
+    await ensure_db()
+    # ensure user exists (reuse your service impl)
+    await _svc_upsert_user(user_id=user_id, name=name)
+    out = await set_default_user_id(user_id)
+    return out
+
+
+@mcp.tool()
+@log_tool(name="get_default_user", redact_keys=())
+async def get_default_user() -> Dict[str, Any]:
+    """Return the currently configured default user id, if any."""
+    await ensure_db()
+    uid = await get_default_user_id()
+    return {"default_user_id": uid}
